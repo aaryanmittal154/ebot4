@@ -19,6 +19,7 @@ app = FastAPI(title="Email Bot API")
 
 # Global variables
 bot = None
+vector_stores = None
 initialization_task: Optional[asyncio.Task] = None
 initialization_status = {
     "state": "not_started",
@@ -38,15 +39,23 @@ def update_init_status(state: str, error: Optional[str] = None, details: dict = 
 
 async def initialize_bot_async():
     """Initialize the bot asynchronously"""
-    global bot
+    global bot, vector_stores
     try:
         update_init_status("in_progress", details={"step": "connecting to services"})
 
         # Initialize in thread pool to not block
-        bot_stores = await asyncio.get_event_loop().run_in_executor(
-            None, initialize_system
-        )
-        bot = MailingBot()
+        if not vector_stores:
+            vector_stores = await asyncio.get_event_loop().run_in_executor(
+                None, initialize_system
+            )
+            logger.info("Vector stores initialized")
+
+        # Only create bot if it doesn't exist
+        if not bot:
+            bot = MailingBot()
+            bot.vector_store = vector_stores[0]
+            bot.job_store = vector_stores[1]
+            logger.info("Bot initialized with existing vector stores")
 
         update_init_status("completed", details={"step": "ready for new emails"})
         logger.info("Bot initialization completed successfully")
@@ -63,8 +72,9 @@ async def startup_event():
 
     # Initialize the bot
     global initialization_task
-    initialization_task = asyncio.create_task(initialize_bot_async())
-    logger.info("Application startup complete - bot initializing")
+    if not initialization_task:
+        initialization_task = asyncio.create_task(initialize_bot_async())
+        logger.info("Application startup complete - bot initializing")
 
 
 @app.get("/")

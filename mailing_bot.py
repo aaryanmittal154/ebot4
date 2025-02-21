@@ -14,15 +14,19 @@ logger = logging.getLogger(__name__)
 
 class MailingBot:
     def __init__(self):
-        """Initialize the mailing bot with existing vector stores"""
+        """Initialize the mailing bot"""
         self.email_handler = EmailHandler()
-        self.vector_store = VectorStore()
-        self.job_store = JobCandidateStore()
+        self.vector_store = None
+        self.job_store = None
         self.classifier = EmailClassifier()
-        logger.info("MailingBot initialized with existing vector stores")
+        logger.info("MailingBot base initialization complete")
 
     def process_new_emails(self):
         """Main processing loop for new emails"""
+        if not self.vector_store or not self.job_store:
+            logger.error("Vector stores not initialized")
+            raise RuntimeError("Vector stores not initialized")
+
         logger.info("\n=== Checking for new emails ===")
         new_emails = self.email_handler.fetch_new_emails()
         logger.info(f"Found {len(new_emails)} new emails")
