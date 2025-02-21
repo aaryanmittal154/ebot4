@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: email-bot
+    env: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: EMAIL_ADDRESS
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_ENVIRONMENT
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
