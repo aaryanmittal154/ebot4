@@ -4,12 +4,14 @@ services:
     env: docker
     plan: free
     healthCheckPath: /health
-    healthCheckTimeout: 900 # 15 minutes in seconds
-    initialDeployHooks:
-      - sleep 30 # Give some time for initial setup
+    startCommand: sleep 30 && gunicorn app:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 900
+    autoDeploy: false
+    buildCommand: pip install -r requirements.txt
     healthCheck:
-      retryWindow: 900s # 15 minutes retry window
-      numRetries: 45 # Retry every 20 seconds for 15 minutes
+      grace_period: 900s
+      interval: 20s
+      timeout: 900s
+      method: get
     envVars:
       - key: EMAIL_ADDRESS
         sync: false
