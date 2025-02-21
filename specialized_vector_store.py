@@ -3,33 +3,39 @@ from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 from config import CONFIG
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class JobCandidateStore:
     def __init__(self):
         self.openai_client = OpenAI()
-        self.pinecone = Pinecone(api_key=CONFIG["pinecone"].API_KEY)
+        self.pinecone = Pinecone(
+            api_key=CONFIG["pinecone"].API_KEY,
+            environment=CONFIG["pinecone"].ENVIRONMENT,
+        )
         self.job_index = self._init_index("job-candidates")
 
     def _init_index(self, index_name: str):
         """Initialize Pinecone index for jobs/candidates"""
         try:
-            print(f"Checking index: {index_name}")
+            logger.info(f"Checking index: {index_name}")
             self.pinecone.describe_index(index_name)
-            print(f"Index {index_name} already exists, connecting...")
+            logger.info(f"Index {index_name} already exists, connecting...")
         except Exception:
-            print(f"Creating new index: {index_name}")
+            logger.info(f"Creating new index: {index_name}")
             self.pinecone.create_index(
                 name=index_name,
                 dimension=CONFIG["pinecone"].DIMENSION,
                 metric=CONFIG["pinecone"].METRIC,
-                spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+                spec=ServerlessSpec(cloud="aws", region="us-west-2"),
             )
-            print("Waiting for index to be ready...")
+            logger.info("Waiting for index to be ready...")
             while not self.pinecone.describe_index(index_name).status["ready"]:
                 time.sleep(1)
-                print(".", end="", flush=True)
-            print("\nIndex created successfully!")
+                logger.info(".", end="", flush=True)
+            logger.info("\nIndex created successfully!")
 
         return self.pinecone.Index(index_name)
 

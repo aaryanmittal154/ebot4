@@ -9,6 +9,8 @@ from specialized_vector_store import JobCandidateStore
 from config import CONFIG
 from pinecone import Pinecone
 from openai import OpenAI
+from pinecone.core.client.api_client import ApiClient
+from pinecone.core.client.models import CreateIndexRequest, ServerlessSpec
 
 # Configure logging
 logging.basicConfig(
@@ -19,7 +21,18 @@ logger = logging.getLogger(__name__)
 
 def initialize_vector_stores():
     """Initialize both vector stores"""
-    pc = Pinecone(api_key=CONFIG["pinecone"].API_KEY)
+    # Get Pinecone configuration
+    pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
+
+    logger.info(f"Initializing Pinecone with environment: {pinecone_env}")
+
+    # Update CONFIG with environment values
+    CONFIG["pinecone"].API_KEY = pinecone_api_key
+    CONFIG["pinecone"].ENVIRONMENT = pinecone_env
+
+    # Initialize Pinecone client with explicit environment
+    pc = Pinecone(api_key=pinecone_api_key, environment=pinecone_env)
 
     # Initialize main email vector store
     logger.info("Initializing main email vector store...")
@@ -32,6 +45,24 @@ def initialize_vector_stores():
         logger.info(f"No existing email index to delete: {str(e)}")
 
     logger.info("Creating new email vector store...")
+    try:
+        # Create index with explicit environment settings
+        pc.create_index(
+            name=CONFIG["pinecone"].INDEX_NAME,
+            dimension=CONFIG["pinecone"].DIMENSION,
+            metric=CONFIG["pinecone"].METRIC,
+            spec=ServerlessSpec(
+                cloud="aws", region="us-west-2"  # Using us-west-2 for better stability
+            ),
+        )
+        logger.info("Waiting for index to be ready...")
+        while not pc.describe_index(CONFIG["pinecone"].INDEX_NAME).status["ready"]:
+            time.sleep(1)
+        logger.info("✅ Email index created successfully")
+    except Exception as e:
+        logger.error(f"Error creating email index: {str(e)}")
+        raise
+
     vector_store = VectorStore()
     logger.info("✅ Main email vector store initialized")
 
@@ -46,6 +77,24 @@ def initialize_vector_stores():
         logger.info(f"No existing job-candidates index to delete: {str(e)}")
 
     logger.info("Creating new job/candidate store...")
+    try:
+        # Create job-candidates index with explicit environment settings
+        pc.create_index(
+            name="job-candidates",
+            dimension=CONFIG["pinecone"].DIMENSION,
+            metric=CONFIG["pinecone"].METRIC,
+            spec=ServerlessSpec(
+                cloud="aws", region="us-west-2"  # Using us-west-2 for better stability
+            ),
+        )
+        logger.info("Waiting for job-candidates index to be ready...")
+        while not pc.describe_index("job-candidates").status["ready"]:
+            time.sleep(1)
+        logger.info("✅ Job-candidates index created successfully")
+    except Exception as e:
+        logger.error(f"Error creating job-candidates index: {str(e)}")
+        raise
+
     job_store = JobCandidateStore()
     logger.info("✅ Job/candidate store initialized")
 

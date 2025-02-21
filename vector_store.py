@@ -4,11 +4,19 @@ from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 from config import CONFIG
 import time
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class VectorStore:
     def __init__(self):
         self.openai_client = OpenAI()
-        self.pinecone = Pinecone(api_key=CONFIG["pinecone"].API_KEY)
+        # Initialize Pinecone with explicit environment
+        self.pinecone = Pinecone(
+            api_key=CONFIG["pinecone"].API_KEY,
+            environment=CONFIG["pinecone"].ENVIRONMENT,
+        )
         self._init_index()
 
     def _init_index(self):
@@ -17,32 +25,29 @@ class VectorStore:
 
         try:
             # Try to describe the index first
-            print(f"Checking index: {index_name}")
+            logger.info(f"Checking index: {index_name}")
             self.pinecone.describe_index(index_name)
-            print(f"Index {index_name} already exists, connecting...")
+            logger.info(f"Index {index_name} already exists, connecting...")
         except Exception as e:
-            print(f"Creating new index: {index_name}")
+            logger.info(f"Creating new index: {index_name}")
             try:
                 self.pinecone.create_index(
                     name=index_name,
                     dimension=CONFIG["pinecone"].DIMENSION,
                     metric=CONFIG["pinecone"].METRIC,
-                    spec=ServerlessSpec(
-                        cloud="aws",
-                        region="us-east-1"
-                    )
+                    spec=ServerlessSpec(cloud="aws", region="us-west-2"),
                 )
-                print("Waiting for index to be ready...")
-                while not self.pinecone.describe_index(index_name).status['ready']:
+                logger.info("Waiting for index to be ready...")
+                while not self.pinecone.describe_index(index_name).status["ready"]:
                     time.sleep(1)
-                    print(".", end="", flush=True)
-                print("\nIndex created successfully!")
+                    logger.info(".", end="", flush=True)
+                logger.info("\nIndex created successfully!")
             except Exception as create_error:
-                print(f"Error creating index: {str(create_error)}")
+                logger.error(f"Error creating index: {str(create_error)}")
                 raise
 
         self.index = self.pinecone.Index(index_name)
-        print("Successfully connected to index!")
+        logger.info("Successfully connected to index!")
 
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embeddings using OpenAI's API"""
@@ -60,22 +65,22 @@ class VectorStore:
             "subject": email_data["subject"] or "",  # Convert None to empty string
             "content": email_data["content"] or "",
             "thread_id": email_data["thread_id"] or "",
-            "sender": email_data["sender"] or ""
+            "sender": email_data["sender"] or "",
         }
 
         self.index.upsert(
-            vectors=[{
-                "id": email_data["message_id"],
-                "values": embedding,
-                "metadata": metadata
-            }],
-            namespace=CONFIG["pinecone"].NAMESPACE
+            vectors=[
+                {
+                    "id": email_data["message_id"],
+                    "values": embedding,
+                    "metadata": metadata,
+                }
+            ],
+            namespace=CONFIG["pinecone"].NAMESPACE,
         )
 
     def weighted_similarity_search(
-        self,
-        subject_embedding: List[float],
-        content_embedding: List[float]
+        self, subject_embedding: List[float], content_embedding: List[float]
     ) -> List[Dict[str, Any]]:
         """Perform weighted similarity search using Pinecone"""
         print("\n   Performing weighted similarity search...")
@@ -91,7 +96,7 @@ class VectorStore:
             namespace=CONFIG["pinecone"].NAMESPACE,
             vector=combined_embedding,
             top_k=CONFIG["search"].TOP_K * 2,  # Get more results for deduplication
-            include_metadata=True
+            include_metadata=True,
         )
 
         # Deduplicate results
@@ -99,7 +104,7 @@ class VectorStore:
         unique_results = []
 
         for match in results.matches:
-            content = match.metadata.get('content', '').strip()
+            content = match.metadata.get("content", "").strip()
             content_hash = hash(content)  # Use hash for better comparison
 
             if content_hash not in seen_contents and content:  # Skip empty content
@@ -157,10 +162,12 @@ class VectorStore:
             temperature=0.3,
         )
 
-        keywords = response.choices[0].message.content.split(',')
+        keywords = response.choices[0].message.content.split(",")
         return [k.strip().lower() for k in keywords]
 
-    def _calculate_keyword_score(self, metadata: Dict[str, str], keywords: List[str]) -> float:
+    def _calculate_keyword_score(
+        self, metadata: Dict[str, str], keywords: List[str]
+    ) -> float:
         """Calculate keyword match score"""
         text = f"{metadata['subject']} {metadata['content']}".lower()
         matches = sum(1 for keyword in keywords if keyword in text)
