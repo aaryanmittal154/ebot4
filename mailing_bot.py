@@ -4,27 +4,35 @@ from vector_store import VectorStore
 from classifier import EmailClassifier, EmailCategory
 from config import CONFIG
 from specialized_vector_store import JobCandidateStore
+import logging
+from initialize_bot import process_email_content
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class MailingBot:
     def __init__(self):
+        """Initialize the mailing bot with existing vector stores"""
         self.email_handler = EmailHandler()
         self.vector_store = VectorStore()
         self.job_store = JobCandidateStore()
         self.classifier = EmailClassifier()
+        logger.info("MailingBot initialized with existing vector stores")
 
     def process_new_emails(self):
         """Main processing loop for new emails"""
-        print("\n=== Checking for new emails ===")
+        logger.info("\n=== Checking for new emails ===")
         new_emails = self.email_handler.fetch_new_emails()
-        print(f"Found {len(new_emails)} new emails")
+        logger.info(f"Found {len(new_emails)} new emails")
 
         for email in new_emails:
             try:
-                print(f"\n=== Processing email: {email.subject} ===")
+                logger.info(f"\n=== Processing email: {email.subject} ===")
                 self._process_single_email(email)
             except Exception as e:
-                print(f"❌ Error processing email: {str(e)}")
+                logger.error(f"❌ Error processing email: {str(e)}")
                 continue
 
     def _process_single_email(self, email: EmailData):

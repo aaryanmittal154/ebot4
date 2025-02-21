@@ -33,65 +33,15 @@ def initialize_vector_stores():
     # Initialize Pinecone client with explicit environment
     pc = PineconeGRPC(api_key=pinecone_api_key)
 
-    # Initialize main email vector store
-    logger.info("Initializing main email vector store...")
-    try:
-        logger.info("Checking for existing email index...")
-        pc.delete_index(CONFIG["pinecone"].INDEX_NAME)
-        logger.info("✅ Old email index deleted")
-        time.sleep(5)  # Wait for deletion to complete
-    except Exception as e:
-        logger.info(f"No existing email index to delete: {str(e)}")
-
-    logger.info("Creating new email vector store...")
-    try:
-        # Create index with explicit environment settings
-        pc.create_index(
-            name=CONFIG["pinecone"].INDEX_NAME,
-            dimension=CONFIG["pinecone"].DIMENSION,
-            metric=CONFIG["pinecone"].METRIC,
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-        )
-        logger.info("Waiting for index to be ready...")
-        while not pc.describe_index(CONFIG["pinecone"].INDEX_NAME).status.ready:
-            time.sleep(1)
-        logger.info("✅ Email index created successfully")
-    except Exception as e:
-        logger.error(f"Error creating email index: {str(e)}")
-        raise
-
+    # Connect to existing email vector store
+    logger.info("Connecting to existing email vector store...")
     vector_store = VectorStore()
-    logger.info("✅ Main email vector store initialized")
+    logger.info("✅ Connected to email vector store")
 
-    # Initialize job/candidate vector store
-    logger.info("\nInitializing job/candidate vector store...")
-    try:
-        logger.info("Checking for existing job-candidates index...")
-        pc.delete_index("job-candidates")
-        logger.info("✅ Old job-candidates index deleted")
-        time.sleep(5)  # Wait for deletion to complete
-    except Exception as e:
-        logger.info(f"No existing job-candidates index to delete: {str(e)}")
-
-    logger.info("Creating new job/candidate store...")
-    try:
-        # Create job-candidates index with explicit environment settings
-        pc.create_index(
-            name="job-candidates",
-            dimension=CONFIG["pinecone"].DIMENSION,
-            metric=CONFIG["pinecone"].METRIC,
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-        )
-        logger.info("Waiting for job-candidates index to be ready...")
-        while not pc.describe_index("job-candidates").status.ready:
-            time.sleep(1)
-        logger.info("✅ Job-candidates index created successfully")
-    except Exception as e:
-        logger.error(f"Error creating job-candidates index: {str(e)}")
-        raise
-
+    # Connect to existing job/candidate vector store
+    logger.info("\nConnecting to existing job/candidate vector store...")
     job_store = JobCandidateStore()
-    logger.info("✅ Job/candidate store initialized")
+    logger.info("✅ Connected to job/candidate store")
 
     return vector_store, job_store
 
@@ -173,7 +123,7 @@ def process_email_content(
 
 
 def initialize_system():
-    """Initialize the entire system"""
+    """Initialize the system without processing old emails"""
     logger.info("=== Initializing Email Bot System ===")
 
     # Load environment variables
@@ -193,76 +143,10 @@ def initialize_system():
     # Initialize email handler
     logger.info("\nConnecting to Gmail...")
     email_handler = EmailHandler()
-
-    # Fetch all emails from Gmail
-    logger.info("\nFetching all emails from Gmail...")
-    email_handler.imap.select("INBOX")
-    _, messages = email_handler.imap.search(None, "ALL")
-
-    total_emails = len(messages[0].split())
-    logger.info(f"Found {total_emails} emails in inbox")
-
-    # Process each email
-    processed = 0
-    errors = 0
-    job_related = 0
-    candidate_related = 0
-
-    try:
-        for msg_num in messages[0].split():
-            try:
-                logger.info(
-                    f"\nProcessing email {processed + 1}/{total_emails}",
-                )
-
-                _, msg_data = email_handler.imap.fetch(msg_num, "(RFC822)")
-                email_body = msg_data[0][1]
-                msg = email.message_from_bytes(email_body)
-
-                content = email_handler._get_email_content(msg)
-                thread_id = msg.get("Thread-Index") or msg.get("In-Reply-To")
-                references = (
-                    msg.get("References", "").split() if msg.get("References") else []
-                )
-
-                email_data = EmailData(
-                    subject=msg["subject"] or "",
-                    content=content or "",
-                    thread_id=thread_id,
-                    references=references,
-                    sender=msg["from"],
-                    message_id=msg["message-id"] or f"generated_id_{msg_num.decode()}",
-                )
-
-                # Show progress
-                logger.info(f" - Subject: {email_data.subject[:50]}...")
-
-                # Process email content
-                process_email_content(email_data, vector_store, job_store)
-
-                processed += 1
-
-                if processed % 10 == 0:
-                    logger.info(f"✅ Processed {processed}/{total_emails} emails")
-
-            except Exception as e:
-                errors += 1
-                logger.error(f"❌ Error processing email {msg_num.decode()}: {str(e)}")
-                continue
-
-    except KeyboardInterrupt:
-        logger.warning("\n⚠️ Process interrupted by user")
-    finally:
-        logger.info("\n=== Processing Summary ===")
-        logger.info(f"Total emails: {total_emails}")
-        logger.info(f"Successfully processed: {processed}")
-        logger.info(f"Errors: {errors}")
-        logger.info(f"Completion rate: {(processed/total_emails)*100:.1f}%")
+    logger.info("✅ Connected to Gmail")
 
     logger.info("\n=== System Initialization Complete ===")
-    logger.info(
-        "\nYou can now run the bot with 'python run_bot.py' and send a test email."
-    )
+    logger.info("Ready to process new emails")
 
     return vector_store, job_store
 

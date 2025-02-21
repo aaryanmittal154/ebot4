@@ -40,7 +40,7 @@ async def initialize_bot_async():
     """Initialize the bot asynchronously"""
     global bot
     try:
-        update_init_status("in_progress", details={"step": "starting"})
+        update_init_status("in_progress", details={"step": "connecting to services"})
 
         # Initialize in thread pool to not block
         bot_stores = await asyncio.get_event_loop().run_in_executor(
@@ -48,7 +48,7 @@ async def initialize_bot_async():
         )
         bot = MailingBot()
 
-        update_init_status("completed", details={"step": "finished"})
+        update_init_status("completed", details={"step": "ready for new emails"})
         logger.info("Bot initialization completed successfully")
     except Exception as e:
         error_msg = str(e)
@@ -61,10 +61,10 @@ async def startup_event():
     # Load environment variables
     load_dotenv()
 
-    # Comment out initialization for now
-    # global initialization_task
-    # initialization_task = asyncio.create_task(initialize_bot_async())
-    logger.info("Application startup complete - initialization disabled")
+    # Initialize the bot
+    global initialization_task
+    initialization_task = asyncio.create_task(initialize_bot_async())
+    logger.info("Application startup complete - bot initializing")
 
 
 @app.get("/")
@@ -91,19 +91,38 @@ async def get_initialization_status():
     """Get initialization status"""
     return {
         "status": "success",
-        "message": "Initialization disabled",
-        "details": initialization_status,
+        "data": initialization_status,
     }
 
 
 @app.post("/process-emails")
 async def process_emails(background_tasks: BackgroundTasks):
-    """Process emails endpoint"""
-    return {
-        "status": "success",
-        "message": "Email processing disabled",
-        "details": {"initialization_status": "disabled"},
-    }
+    """Process new emails endpoint"""
+    if initialization_status["state"] != "completed":
+        return {
+            "status": "error",
+            "message": "Bot initialization not complete",
+            "details": initialization_status,
+        }
+
+    if not bot:
+        return {
+            "status": "error",
+            "message": "Bot not initialized",
+        }
+
+    try:
+        # Process only new emails in background
+        background_tasks.add_task(lambda: bot.process_new_emails())
+        return {
+            "status": "success",
+            "message": "Processing new emails in background",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to process emails: {str(e)}",
+        }
 
 
 if __name__ == "__main__":
