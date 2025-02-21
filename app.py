@@ -41,28 +41,57 @@ async def initialize_bot_async():
     """Initialize the bot asynchronously"""
     global bot, vector_stores
     try:
-        update_init_status("in_progress", details={"step": "connecting to services"})
+        # Check environment variables first
+        required_vars = [
+            "EMAIL_ADDRESS",
+            "EMAIL_PASSWORD",
+            "PINECONE_API_KEY",
+            "PINECONE_ENVIRONMENT",
+            "OPENAI_API_KEY",
+        ]
 
-        # Initialize in thread pool to not block
-        if not vector_stores:
-            vector_stores = await asyncio.get_event_loop().run_in_executor(
-                None, initialize_system
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        if missing_vars:
+            raise ValueError(
+                f"Missing required environment variables: {', '.join(missing_vars)}"
             )
-            logger.info("Vector stores initialized")
 
-        # Only create bot if it doesn't exist
+        update_init_status(
+            "in_progress", details={"step": "checking environment variables"}
+        )
+
+        # Initialize vector stores with timeout
+        if not vector_stores:
+            update_init_status(
+                "in_progress", details={"step": "initializing vector stores"}
+            )
+            try:
+                vector_stores = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, initialize_system),
+                    timeout=60,  # 60 seconds timeout
+                )
+                logger.info("Vector stores initialized successfully")
+            except asyncio.TimeoutError:
+                raise TimeoutError("Vector store initialization timed out")
+
+        # Initialize bot with timeout
         if not bot:
-            bot = MailingBot()
-            bot.vector_store = vector_stores[0]
-            bot.job_store = vector_stores[1]
-            logger.info("Bot initialized with existing vector stores")
+            update_init_status("in_progress", details={"step": "initializing bot"})
+            try:
+                bot = MailingBot()
+                bot.vector_store = vector_stores[0]
+                bot.job_store = vector_stores[1]
+                logger.info("Bot initialized with existing vector stores")
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize bot: {str(e)}")
 
-        update_init_status("completed", details={"step": "ready for new emails"})
+        update_init_status("completed", details={"step": "initialization complete"})
         logger.info("Bot initialization completed successfully")
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Bot initialization failed: {error_msg}")
         update_init_status("failed", error=error_msg)
+        raise
 
 
 @app.on_event("startup")
@@ -70,11 +99,11 @@ async def startup_event():
     # Load environment variables
     load_dotenv()
 
-    # Initialize the bot
+    # Start initialization in background
     global initialization_task
     if not initialization_task:
         initialization_task = asyncio.create_task(initialize_bot_async())
-        logger.info("Application startup complete - bot initializing")
+        logger.info("Application startup complete - bot initializing in background")
 
 
 @app.get("/")
@@ -86,6 +115,7 @@ async def root():
         "details": {
             "initialization_status": initialization_status["state"],
             "last_update": initialization_status["last_update"],
+            "error": initialization_status.get("error"),
         },
     }
 
@@ -99,6 +129,22 @@ async def health_check():
 @app.get("/initialization-status")
 async def get_initialization_status():
     """Get initialization status"""
+    # Check if initialization task failed
+    if (
+        initialization_task
+        and initialization_task.done()
+        and initialization_task.exception()
+    ):
+        return {
+            "status": "error",
+            "message": "Initialization failed",
+            "details": {
+                "error": str(initialization_task.exception()),
+                "state": initialization_status["state"],
+                "last_update": initialization_status["last_update"],
+            },
+        }
+
     return {
         "status": "success",
         "data": initialization_status,
@@ -108,7 +154,14 @@ async def get_initialization_status():
 @app.post("/process-emails")
 async def process_emails(background_tasks: BackgroundTasks):
     """Process new emails endpoint"""
-    if initialization_status["state"] != "completed":
+    # Check initialization status
+    if initialization_status["state"] == "failed":
+        return {
+            "status": "error",
+            "message": "Bot initialization failed",
+            "details": initialization_status,
+        }
+    elif initialization_status["state"] != "completed":
         return {
             "status": "error",
             "message": "Bot initialization not complete",
@@ -129,6 +182,7 @@ async def process_emails(background_tasks: BackgroundTasks):
             "message": "Processing new emails in background",
         }
     except Exception as e:
+        logger.error(f"Failed to process emails: {str(e)}")
         return {
             "status": "error",
             "message": f"Failed to process emails: {str(e)}",
@@ -137,5 +191,10 @@ async def process_emails(background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False
+        "app:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        reload=False,
+        timeout_keep_alive=120,
+        workers=1,
     )

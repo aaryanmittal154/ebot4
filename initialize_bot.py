@@ -24,6 +24,9 @@ def initialize_vector_stores():
     pinecone_api_key = os.getenv("PINECONE_API_KEY")
     pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
 
+    if not pinecone_api_key:
+        raise ValueError("PINECONE_API_KEY environment variable is not set")
+
     logger.info(f"Initializing Pinecone with environment: {pinecone_env}")
 
     # Update CONFIG with environment values
@@ -31,17 +34,34 @@ def initialize_vector_stores():
     CONFIG["pinecone"].ENVIRONMENT = pinecone_env
 
     # Initialize Pinecone client with explicit environment
-    pc = PineconeGRPC(api_key=pinecone_api_key)
+    try:
+        pc = PineconeGRPC(api_key=pinecone_api_key)
+        logger.info("✅ Pinecone client initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Pinecone client: {str(e)}")
+        raise
 
     # Connect to existing email vector store
     logger.info("Connecting to existing email vector store...")
-    vector_store = VectorStore()
-    logger.info("✅ Connected to email vector store")
+    try:
+        vector_store = VectorStore()
+        # Test connection
+        vector_store.index.describe_index_stats()
+        logger.info("✅ Connected to email vector store")
+    except Exception as e:
+        logger.error(f"Failed to connect to email vector store: {str(e)}")
+        raise
 
     # Connect to existing job/candidate vector store
     logger.info("\nConnecting to existing job/candidate vector store...")
-    job_store = JobCandidateStore()
-    logger.info("✅ Connected to job/candidate store")
+    try:
+        job_store = JobCandidateStore()
+        # Test connection
+        job_store.job_index.describe_index_stats()
+        logger.info("✅ Connected to job/candidate store")
+    except Exception as e:
+        logger.error(f"Failed to connect to job/candidate store: {str(e)}")
+        raise
 
     return vector_store, job_store
 
@@ -130,6 +150,21 @@ def initialize_system():
     logger.info("Loading environment variables...")
     load_dotenv()
 
+    # Check required environment variables
+    required_vars = [
+        "EMAIL_ADDRESS",
+        "EMAIL_PASSWORD",
+        "PINECONE_API_KEY",
+        "PINECONE_ENVIRONMENT",
+        "OPENAI_API_KEY",
+    ]
+
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(missing_vars)}"
+        )
+
     # Update config
     logger.info("Updating configuration...")
     CONFIG["email"].EMAIL = os.getenv("EMAIL_ADDRESS")
@@ -137,13 +172,34 @@ def initialize_system():
     CONFIG["pinecone"].API_KEY = os.getenv("PINECONE_API_KEY")
     CONFIG["pinecone"].ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
 
-    # Initialize vector stores
-    vector_store, job_store = initialize_vector_stores()
+    # Initialize vector stores with retry
+    max_retries = 3
+    retry_delay = 5
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            vector_store, job_store = initialize_vector_stores()
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"Attempt {attempt + 1} failed, retrying in {retry_delay} seconds..."
+                )
+                time.sleep(retry_delay)
+            else:
+                logger.error("All initialization attempts failed")
+                raise last_error
 
     # Initialize email handler
     logger.info("\nConnecting to Gmail...")
-    email_handler = EmailHandler()
-    logger.info("✅ Connected to Gmail")
+    try:
+        email_handler = EmailHandler()
+        logger.info("✅ Connected to Gmail")
+    except Exception as e:
+        logger.error(f"Failed to connect to Gmail: {str(e)}")
+        raise
 
     logger.info("\n=== System Initialization Complete ===")
     logger.info("Ready to process new emails")
