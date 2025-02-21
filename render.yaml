@@ -4,6 +4,7 @@ services:
     env: docker
     plan: free
     healthCheckPath: /health
+    healthCheckTimeout: 900 # 15 minutes in seconds
     envVars:
       - key: EMAIL_ADDRESS
         sync: false
