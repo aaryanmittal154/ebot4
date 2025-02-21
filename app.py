@@ -22,6 +22,7 @@ bot = None
 vector_stores = None
 initialization_task: Optional[asyncio.Task] = None
 initialization_lock = asyncio.Lock()
+polling_task: Optional[asyncio.Task] = None
 initialization_status = {
     "state": "not_started",
     "error": None,
@@ -38,9 +39,23 @@ def update_init_status(state: str, error: Optional[str] = None, details: dict = 
     initialization_status["last_update"] = time.time()
 
 
+async def poll_emails():
+    """Poll for new emails periodically"""
+    global bot
+    while True:
+        try:
+            if bot and initialization_status["state"] == "completed":
+                logger.info("Checking for new emails...")
+                bot.process_new_emails()
+            await asyncio.sleep(60)  # Check every minute
+        except Exception as e:
+            logger.error(f"Error in email polling: {str(e)}")
+            await asyncio.sleep(60)  # Wait before retrying
+
+
 async def initialize_bot_async():
     """Initialize the bot asynchronously"""
-    global bot, vector_stores, initialization_task
+    global bot, vector_stores, initialization_task, polling_task
 
     # Use lock to prevent parallel initialization
     async with initialization_lock:
@@ -101,6 +116,12 @@ async def initialize_bot_async():
 
             update_init_status("completed", details={"step": "initialization complete"})
             logger.info("Bot initialization completed successfully")
+
+            # Start email polling after successful initialization
+            if not polling_task or polling_task.done():
+                polling_task = asyncio.create_task(poll_emails())
+                logger.info("Started automatic email polling")
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Bot initialization failed: {error_msg}")
@@ -120,6 +141,19 @@ async def startup_event():
         logger.info("Application startup complete - bot initializing in background")
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    global polling_task
+    if polling_task:
+        polling_task.cancel()
+        try:
+            await polling_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Email polling stopped")
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -130,6 +164,11 @@ async def root():
             "initialization_status": initialization_status["state"],
             "last_update": initialization_status["last_update"],
             "error": initialization_status.get("error"),
+            "polling_active": (
+                polling_task is not None and not polling_task.done()
+                if polling_task
+                else False
+            ),
         },
     }
 
@@ -162,12 +201,17 @@ async def get_initialization_status():
     return {
         "status": "success",
         "data": initialization_status,
+        "polling_active": (
+            polling_task is not None and not polling_task.done()
+            if polling_task
+            else False
+        ),
     }
 
 
 @app.post("/process-emails")
 async def process_emails(background_tasks: BackgroundTasks):
-    """Process new emails endpoint"""
+    """Process new emails endpoint (manual trigger)"""
     # Check initialization status
     if initialization_status["state"] == "failed":
         return {
