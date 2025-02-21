@@ -3,7 +3,8 @@ services:
     name: email-bot
     env: docker
     plan: free
-    startCommand: gunicorn app:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 900
+    buildCommand: docker build -t email-bot .
+    startCommand: gunicorn app:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 900 --keep-alive 120
     envVars:
       - key: EMAIL_ADDRESS
         sync: false

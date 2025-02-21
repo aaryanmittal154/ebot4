@@ -21,6 +21,7 @@ app = FastAPI(title="Email Bot API")
 bot = None
 vector_stores = None
 initialization_task: Optional[asyncio.Task] = None
+initialization_lock = asyncio.Lock()
 initialization_status = {
     "state": "not_started",
     "error": None,
@@ -39,59 +40,72 @@ def update_init_status(state: str, error: Optional[str] = None, details: dict = 
 
 async def initialize_bot_async():
     """Initialize the bot asynchronously"""
-    global bot, vector_stores
-    try:
-        # Check environment variables first
-        required_vars = [
-            "EMAIL_ADDRESS",
-            "EMAIL_PASSWORD",
-            "PINECONE_API_KEY",
-            "PINECONE_ENVIRONMENT",
-            "OPENAI_API_KEY",
-        ]
+    global bot, vector_stores, initialization_task
 
-        missing_vars = [var for var in required_vars if not os.getenv(var)]
-        if missing_vars:
-            raise ValueError(
-                f"Missing required environment variables: {', '.join(missing_vars)}"
-            )
+    # Use lock to prevent parallel initialization
+    async with initialization_lock:
+        # Check if already initialized or initializing
+        if initialization_status["state"] == "completed":
+            logger.info("Bot already initialized")
+            return
+        if initialization_status["state"] == "in_progress":
+            logger.info("Bot initialization already in progress")
+            return
 
-        update_init_status(
-            "in_progress", details={"step": "checking environment variables"}
-        )
+        try:
+            # Check environment variables first
+            required_vars = [
+                "EMAIL_ADDRESS",
+                "EMAIL_PASSWORD",
+                "PINECONE_API_KEY",
+                "PINECONE_ENVIRONMENT",
+                "OPENAI_API_KEY",
+            ]
 
-        # Initialize vector stores with timeout
-        if not vector_stores:
-            update_init_status(
-                "in_progress", details={"step": "initializing vector stores"}
-            )
-            try:
-                vector_stores = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(None, initialize_system),
-                    timeout=60,  # 60 seconds timeout
+            missing_vars = [var for var in required_vars if not os.getenv(var)]
+            if missing_vars:
+                raise ValueError(
+                    f"Missing required environment variables: {', '.join(missing_vars)}"
                 )
-                logger.info("Vector stores initialized successfully")
-            except asyncio.TimeoutError:
-                raise TimeoutError("Vector store initialization timed out")
 
-        # Initialize bot with timeout
-        if not bot:
-            update_init_status("in_progress", details={"step": "initializing bot"})
-            try:
-                bot = MailingBot()
-                bot.vector_store = vector_stores[0]
-                bot.job_store = vector_stores[1]
-                logger.info("Bot initialized with existing vector stores")
-            except Exception as e:
-                raise RuntimeError(f"Failed to initialize bot: {str(e)}")
+            update_init_status(
+                "in_progress", details={"step": "checking environment variables"}
+            )
 
-        update_init_status("completed", details={"step": "initialization complete"})
-        logger.info("Bot initialization completed successfully")
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Bot initialization failed: {error_msg}")
-        update_init_status("failed", error=error_msg)
-        raise
+            # Initialize vector stores with timeout
+            if not vector_stores:
+                update_init_status(
+                    "in_progress", details={"step": "initializing vector stores"}
+                )
+                try:
+                    vector_stores = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None, initialize_system
+                        ),
+                        timeout=60,  # 60 seconds timeout
+                    )
+                    logger.info("Vector stores initialized successfully")
+                except asyncio.TimeoutError:
+                    raise TimeoutError("Vector store initialization timed out")
+
+            # Initialize bot with timeout
+            if not bot:
+                update_init_status("in_progress", details={"step": "initializing bot"})
+                try:
+                    bot = MailingBot()
+                    bot.vector_store = vector_stores[0]
+                    bot.job_store = vector_stores[1]
+                    logger.info("Bot initialized with existing vector stores")
+                except Exception as e:
+                    raise RuntimeError(f"Failed to initialize bot: {str(e)}")
+
+            update_init_status("completed", details={"step": "initialization complete"})
+            logger.info("Bot initialization completed successfully")
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Bot initialization failed: {error_msg}")
+            update_init_status("failed", error=error_msg)
+            raise
 
 
 @app.on_event("startup")
@@ -101,7 +115,7 @@ async def startup_event():
 
     # Start initialization in background
     global initialization_task
-    if not initialization_task:
+    if not initialization_task or initialization_task.done():
         initialization_task = asyncio.create_task(initialize_bot_async())
         logger.info("Application startup complete - bot initializing in background")
 
@@ -190,11 +204,12 @@ async def process_emails(background_tasks: BackgroundTasks):
 
 
 if __name__ == "__main__":
+    # Force single worker to prevent multiple initializations
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
         reload=False,
         timeout_keep_alive=120,
-        workers=1,
+        workers=1,  # Force single worker
     )
