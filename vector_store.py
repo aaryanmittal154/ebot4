@@ -6,6 +6,8 @@ from pinecone import ServerlessSpec
 from config import CONFIG
 import time
 import logging
+import os
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -13,39 +15,87 @@ logger = logging.getLogger(__name__)
 class VectorStore:
     def __init__(self):
         self.openai_client = OpenAI()
-        # Initialize Pinecone with explicit environment
-        self.pinecone = PineconeGRPC(api_key=CONFIG["pinecone"].API_KEY)
+        # Load environment variables
+        load_dotenv()
+
+        # Get API key from environment
+        api_key = os.getenv("PINECONE_API_KEY") or CONFIG["pinecone"].API_KEY
+        if not api_key:
+            raise ValueError("Pinecone API key not found in environment or config")
+
+        logger.info("Initializing Pinecone GRPC client...")
+        try:
+            # Initialize Pinecone with explicit environment
+            self.pinecone = PineconeGRPC(api_key=api_key)
+            logger.info("✅ Pinecone GRPC client initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Pinecone client: {str(e)}")
+            raise
+
         self._init_index()
 
     def _init_index(self):
         """Initialize Pinecone index"""
         index_name = CONFIG["pinecone"].INDEX_NAME
+        max_retries = 3
+        retry_delay = 2  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                # Try to describe the index first
+                logger.info(
+                    f"Checking index: {index_name} (attempt {attempt + 1}/{max_retries})"
+                )
+                self.pinecone.describe_index(index_name)
+                logger.info(f"Index {index_name} already exists, connecting...")
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Failed to find index on attempt {attempt + 1}: {str(e)}"
+                )
+                if attempt == max_retries - 1:
+                    logger.info(f"Creating new index: {index_name}")
+                    try:
+                        self.pinecone.create_index(
+                            name=index_name,
+                            dimension=CONFIG["pinecone"].DIMENSION,
+                            metric=CONFIG["pinecone"].METRIC,
+                            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+                        )
+                        logger.info("Waiting for index to be ready...")
+
+                        # Wait for index to be ready with timeout
+                        timeout = 60  # seconds
+                        start_time = time.time()
+                        while time.time() - start_time < timeout:
+                            try:
+                                status = self.pinecone.describe_index(index_name).status
+                                if status.ready:
+                                    logger.info("\nIndex created successfully!")
+                                    break
+                            except Exception:
+                                pass
+                            time.sleep(1)
+                            logger.info(".", end="", flush=True)
+                        else:
+                            raise TimeoutError(
+                                f"Index creation timed out after {timeout} seconds"
+                            )
+                    except Exception as create_error:
+                        logger.error(f"Error creating index: {str(create_error)}")
+                        raise
+                else:
+                    time.sleep(retry_delay)
+                    continue
 
         try:
-            # Try to describe the index first
-            logger.info(f"Checking index: {index_name}")
-            self.pinecone.describe_index(index_name)
-            logger.info(f"Index {index_name} already exists, connecting...")
+            self.index = self.pinecone.Index(index_name)
+            # Verify connection with a simple operation
+            self.index.describe_index_stats()
+            logger.info("Successfully connected to index!")
         except Exception as e:
-            logger.info(f"Creating new index: {index_name}")
-            try:
-                self.pinecone.create_index(
-                    name=index_name,
-                    dimension=CONFIG["pinecone"].DIMENSION,
-                    metric=CONFIG["pinecone"].METRIC,
-                    spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-                )
-                logger.info("Waiting for index to be ready...")
-                while not self.pinecone.describe_index(index_name).status.ready:
-                    time.sleep(1)
-                    logger.info(".", end="", flush=True)
-                logger.info("\nIndex created successfully!")
-            except Exception as create_error:
-                logger.error(f"Error creating index: {str(create_error)}")
-                raise
-
-        self.index = self.pinecone.Index(index_name)
-        logger.info("Successfully connected to index!")
+            logger.error(f"Failed to connect to index: {str(e)}")
+            raise
 
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embeddings using OpenAI's API"""
@@ -58,24 +108,36 @@ class VectorStore:
 
     def store_email(self, email_data: Dict[str, Any], embedding: List[float]):
         """Store email data and its embedding in Pinecone"""
+        max_retries = 3
+        retry_delay = 2
+
         # Clean metadata by removing None values
         metadata = {
-            "subject": email_data["subject"] or "",  # Convert None to empty string
+            "subject": email_data["subject"] or "",
             "content": email_data["content"] or "",
             "thread_id": email_data["thread_id"] or "",
             "sender": email_data["sender"] or "",
         }
 
-        self.index.upsert(
-            vectors=[
-                {
-                    "id": email_data["message_id"],
-                    "values": embedding,
-                    "metadata": metadata,
-                }
-            ],
-            namespace=CONFIG["pinecone"].NAMESPACE,
-        )
+        for attempt in range(max_retries):
+            try:
+                self.index.upsert(
+                    vectors=[
+                        {
+                            "id": email_data["message_id"],
+                            "values": embedding,
+                            "metadata": metadata,
+                        }
+                    ],
+                    namespace=CONFIG["pinecone"].NAMESPACE,
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Upsert attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:
+                    logger.error("All upsert attempts failed")
+                    raise
+                time.sleep(retry_delay)
 
     def weighted_similarity_search(
         self, subject_embedding: List[float], content_embedding: List[float]
