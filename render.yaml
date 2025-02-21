@@ -5,6 +5,11 @@ services:
     plan: free
     healthCheckPath: /health
     healthCheckTimeout: 900 # 15 minutes in seconds
+    initialDeployHooks:
+      - sleep 30 # Give some time for initial setup
+    healthCheck:
+      retryWindow: 900s # 15 minutes retry window
+      numRetries: 45 # Retry every 20 seconds for 15 minutes
     envVars:
       - key: EMAIL_ADDRESS
         sync: false
