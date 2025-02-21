@@ -1,7 +1,8 @@
 from typing import List, Dict, Any
 import numpy as np
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec
+from pinecone.grpc import PineconeGRPC
+from pinecone import ServerlessSpec
 from config import CONFIG
 import time
 import logging
@@ -13,10 +14,7 @@ class VectorStore:
     def __init__(self):
         self.openai_client = OpenAI()
         # Initialize Pinecone with explicit environment
-        self.pinecone = Pinecone(
-            api_key=CONFIG["pinecone"].API_KEY,
-            environment=CONFIG["pinecone"].ENVIRONMENT,
-        )
+        self.pinecone = PineconeGRPC(api_key=CONFIG["pinecone"].API_KEY)
         self._init_index()
 
     def _init_index(self):
@@ -35,10 +33,10 @@ class VectorStore:
                     name=index_name,
                     dimension=CONFIG["pinecone"].DIMENSION,
                     metric=CONFIG["pinecone"].METRIC,
-                    spec=ServerlessSpec(cloud="aws", region="us-west-2"),
+                    spec=ServerlessSpec(cloud="aws", region="us-east-1"),
                 )
                 logger.info("Waiting for index to be ready...")
-                while not self.pinecone.describe_index(index_name).status["ready"]:
+                while not self.pinecone.describe_index(index_name).status.ready:
                     time.sleep(1)
                     logger.info(".", end="", flush=True)
                 logger.info("\nIndex created successfully!")

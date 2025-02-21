@@ -7,10 +7,9 @@ from email_handler import EmailHandler, EmailData
 from vector_store import VectorStore
 from specialized_vector_store import JobCandidateStore
 from config import CONFIG
-from pinecone import Pinecone
+from pinecone.grpc import PineconeGRPC
+from pinecone import ServerlessSpec
 from openai import OpenAI
-from pinecone.core.client.api_client import ApiClient
-from pinecone.core.client.models import CreateIndexRequest, ServerlessSpec
 
 # Configure logging
 logging.basicConfig(
@@ -32,7 +31,7 @@ def initialize_vector_stores():
     CONFIG["pinecone"].ENVIRONMENT = pinecone_env
 
     # Initialize Pinecone client with explicit environment
-    pc = Pinecone(api_key=pinecone_api_key, environment=pinecone_env)
+    pc = PineconeGRPC(api_key=pinecone_api_key)
 
     # Initialize main email vector store
     logger.info("Initializing main email vector store...")
@@ -51,12 +50,10 @@ def initialize_vector_stores():
             name=CONFIG["pinecone"].INDEX_NAME,
             dimension=CONFIG["pinecone"].DIMENSION,
             metric=CONFIG["pinecone"].METRIC,
-            spec=ServerlessSpec(
-                cloud="aws", region="us-west-2"  # Using us-west-2 for better stability
-            ),
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
         )
         logger.info("Waiting for index to be ready...")
-        while not pc.describe_index(CONFIG["pinecone"].INDEX_NAME).status["ready"]:
+        while not pc.describe_index(CONFIG["pinecone"].INDEX_NAME).status.ready:
             time.sleep(1)
         logger.info("✅ Email index created successfully")
     except Exception as e:
@@ -83,12 +80,10 @@ def initialize_vector_stores():
             name="job-candidates",
             dimension=CONFIG["pinecone"].DIMENSION,
             metric=CONFIG["pinecone"].METRIC,
-            spec=ServerlessSpec(
-                cloud="aws", region="us-west-2"  # Using us-west-2 for better stability
-            ),
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
         )
         logger.info("Waiting for job-candidates index to be ready...")
-        while not pc.describe_index("job-candidates").status["ready"]:
+        while not pc.describe_index("job-candidates").status.ready:
             time.sleep(1)
         logger.info("✅ Job-candidates index created successfully")
     except Exception as e:
