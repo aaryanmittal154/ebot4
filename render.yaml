@@ -3,15 +3,7 @@ services:
     name: email-bot
     env: docker
     plan: free
-    healthCheckPath: /health
-    startCommand: sleep 30 && gunicorn app:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 900
-    autoDeploy: false
-    buildCommand: pip install -r requirements.txt
-    healthCheck:
-      grace_period: 900s
-      interval: 20s
-      timeout: 900s
-      method: get
+    startCommand: gunicorn app:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 900
     envVars:
       - key: EMAIL_ADDRESS
         sync: false

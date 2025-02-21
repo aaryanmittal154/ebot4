@@ -10,204 +10,103 @@ import os
 from dotenv import load_dotenv
 import time
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create FastAPI app
 app = FastAPI(title="Email Bot API")
+
+# Global variables
 bot = None
 initialization_task: Optional[asyncio.Task] = None
-initialization_attempts = 0
-MAX_INITIALIZATION_ATTEMPTS = 3
+initialization_status = {
+    "state": "not_started",
+    "error": None,
+    "details": {},
+    "last_update": None,
+}
 
 
-class EmailResponse(BaseModel):
-    status: str
-    message: str
-    details: Optional[dict] = None
-
-
-def check_required_env_vars() -> tuple[bool, list[str]]:
-    """Check if all required environment variables are set"""
-    required_vars = [
-        "PINECONE_API_KEY",
-        "PINECONE_ENVIRONMENT",
-        "EMAIL_ADDRESS",
-        "EMAIL_PASSWORD",
-        "OPENAI_API_KEY",
-    ]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    return len(missing_vars) == 0, missing_vars
+def update_init_status(state: str, error: Optional[str] = None, details: dict = None):
+    """Update initialization status"""
+    initialization_status["state"] = state
+    initialization_status["error"] = error
+    initialization_status["details"] = details or {}
+    initialization_status["last_update"] = time.time()
 
 
 async def initialize_bot_async():
-    """Initialize the bot asynchronously with retries"""
-    global bot, initialization_attempts
+    """Initialize the bot asynchronously"""
+    global bot
+    try:
+        update_init_status("in_progress", details={"step": "starting"})
 
-    # Check environment variables first
-    env_vars_set, missing_vars = check_required_env_vars()
-    if not env_vars_set:
-        logger.error(
-            f"Missing required environment variables: {', '.join(missing_vars)}"
+        # Initialize in thread pool to not block
+        bot_stores = await asyncio.get_event_loop().run_in_executor(
+            None, initialize_system
         )
-        raise ValueError(
-            f"Missing required environment variables: {', '.join(missing_vars)}"
-        )
+        bot = MailingBot()
 
-    while initialization_attempts < MAX_INITIALIZATION_ATTEMPTS:
-        try:
-            logger.info(
-                f"Starting initialization attempt {initialization_attempts + 1}/{MAX_INITIALIZATION_ATTEMPTS}"
-            )
-            # Run initialization in a thread pool
-            bot_stores = await asyncio.get_event_loop().run_in_executor(
-                None, initialize_system
-            )
-            bot = MailingBot()
-            logger.info("Bot initialization completed successfully")
-            return
-        except Exception as e:
-            initialization_attempts += 1
-            if initialization_attempts >= MAX_INITIALIZATION_ATTEMPTS:
-                logger.error(
-                    f"Bot initialization failed after {MAX_INITIALIZATION_ATTEMPTS} attempts: {str(e)}"
-                )
-                raise
-            logger.warning(
-                f"Initialization attempt {initialization_attempts} failed: {str(e)}"
-            )
-            await asyncio.sleep(5)  # Wait before retrying
+        update_init_status("completed", details={"step": "finished"})
+        logger.info("Bot initialization completed successfully")
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Bot initialization failed: {error_msg}")
+        update_init_status("failed", error=error_msg)
 
 
 @app.on_event("startup")
 async def startup_event():
-    global initialization_task
     # Load environment variables
     load_dotenv()
-    # Start initialization in background
-    initialization_task = asyncio.create_task(initialize_bot_async())
+
+    # Comment out initialization for now
+    # global initialization_task
+    # initialization_task = asyncio.create_task(initialize_bot_async())
+    logger.info("Application startup complete - initialization disabled")
 
 
-@app.get("/", response_model=EmailResponse)
+@app.get("/")
 async def root():
-    env_vars_set, missing_vars = check_required_env_vars()
-    status_details = {
-        "initialization_status": "in_progress" if not bot else "completed",
-        "environment_variables_set": env_vars_set,
-    }
-    if not env_vars_set:
-        status_details["missing_variables"] = missing_vars
-
+    """Root endpoint"""
     return {
         "status": "success",
         "message": "Email Bot API is running",
-        "details": status_details,
+        "details": {
+            "initialization_status": initialization_status["state"],
+            "last_update": initialization_status["last_update"],
+        },
     }
 
 
-@app.post("/process-emails", response_model=EmailResponse)
-async def process_emails(background_tasks: BackgroundTasks):
-    """Trigger email processing in the background"""
-    if not bot:
-        status_details = {
-            "initialization_status": "in_progress",
-            "attempts": initialization_attempts,
-        }
-        if (
-            initialization_task
-            and initialization_task.done()
-            and initialization_task.exception()
-        ):
-            status_details["error"] = str(initialization_task.exception())
-
-        return {
-            "status": "error",
-            "message": "Bot not initialized yet",
-            "details": status_details,
-        }
-
-    background_tasks.add_task(bot.process_new_emails)
-    return {"status": "success", "message": "Email processing started in background"}
-
-
-@app.get("/health", response_model=EmailResponse)
+@app.get("/health")
 async def health_check():
-    """Health check endpoint that returns immediately"""
-    env_vars_set, missing_vars = check_required_env_vars()
+    """Health check endpoint"""
+    return {"status": "healthy"}
 
-    init_status = "not_started"
-    if initialization_task:
-        if initialization_task.done():
-            init_status = (
-                "completed" if not initialization_task.exception() else "failed"
-            )
-        else:
-            init_status = "in_progress"
 
+@app.get("/initialization-status")
+async def get_initialization_status():
+    """Get initialization status"""
     return {
         "status": "success",
-        "message": "Service is healthy",
-        "details": {
-            "initialization_status": init_status,
-            "bot_ready": bot is not None,
-            "environment_variables_set": env_vars_set,
-            "initialization_attempts": initialization_attempts,
-        },
+        "message": "Initialization disabled",
+        "details": initialization_status,
     }
 
 
-@app.get("/initialization-status", response_model=EmailResponse)
-async def get_initialization_status():
-    """Get detailed initialization status"""
-    env_vars_set, missing_vars = check_required_env_vars()
-
-    if not env_vars_set:
-        return {
-            "status": "error",
-            "message": "Missing required environment variables",
-            "details": {
-                "initialization_status": "failed",
-                "missing_variables": missing_vars,
-            },
-        }
-
-    if not initialization_task:
-        return {
-            "status": "pending",
-            "message": "Initialization not started",
-            "details": {
-                "initialization_status": "not_started",
-                "attempts": initialization_attempts,
-            },
-        }
-
-    if initialization_task.done():
-        if initialization_task.exception():
-            return {
-                "status": "error",
-                "message": f"Initialization failed: {str(initialization_task.exception())}",
-                "details": {
-                    "initialization_status": "failed",
-                    "attempts": initialization_attempts,
-                    "error": str(initialization_task.exception()),
-                },
-            }
-        return {
-            "status": "success",
-            "message": "Initialization completed",
-            "details": {
-                "initialization_status": "completed",
-                "attempts": initialization_attempts,
-            },
-        }
-
+@app.post("/process-emails")
+async def process_emails(background_tasks: BackgroundTasks):
+    """Process emails endpoint"""
     return {
-        "status": "pending",
-        "message": "Initialization in progress",
-        "details": {
-            "initialization_status": "in_progress",
-            "attempts": initialization_attempts,
-        },
+        "status": "success",
+        "message": "Email processing disabled",
+        "details": {"initialization_status": "disabled"},
     }
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        "app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False
+    )
